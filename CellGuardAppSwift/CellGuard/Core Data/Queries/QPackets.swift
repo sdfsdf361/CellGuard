@@ -12,8 +12,8 @@ import Foundation
 struct SignalMetricSummary: Equatable {
     let minimum: Double
     let maximum: Double
-    let percentile70: Double
-    let percentile90: Double
+    let percentile10: Double
+    let percentile30: Double
 }
 
 struct SignalStatistics: Equatable {
@@ -39,12 +39,34 @@ private struct SignalSample {
     let snr: Double?
 }
 
+struct SignalCellKey: Hashable, Identifiable {
+    let technology: String
+    let country: Int32
+    let network: Int32
+    let area: Int32
+    let cell: Int64
+
+    var id: String { "\(technology)-\(country)-\(network)-\(area)-\(cell)" }
+}
+
+struct SignalTowerCandidate: Identifiable {
+    let key: SignalCellKey
+    let band: Int32
+    let latitude: Double?
+    let longitude: Double?
+    let statistics: SignalStatistics
+
+    var id: String { key.id }
+}
+
 struct PacketImportRefs {
     var cellInfo: [NSManagedObjectID] = []
     var connectivityEvents: [NSManagedObjectID] = []
 }
 
 extension PersistenceController {
+
+    static let minimumSignalSamplesForAutomaticTower = 5
 
     /// Calculates signal distributions for every occurrence of a cell. Values outside
     /// three interquartile ranges are treated as strong packet anomalies. This wider
@@ -127,12 +149,12 @@ extension PersistenceController {
                 return SignalSample(
                     rsrp: nr.rsrp.map(Double.init),
                     rsrq: nr.rsrq.map(Double.init),
-                    snr: nr.snr.map(Double.init)
+                    snr: nr.snr
                 )
             }
             if technology == ALSTechnology.LTE.rawValue, let lte = info.lte {
                 return SignalSample(
-                    rsrp: Double(lte.rsrp), rsrq: Double(lte.rsrq), snr: Double(lte.snr)
+                    rsrp: Double(lte.rsrp), rsrq: Double(lte.rsrq), snr: lte.snr
                 )
             }
             return nil
@@ -180,9 +202,52 @@ extension PersistenceController {
         let sorted = values.sorted()
         return SignalMetricSummary(
             minimum: sorted[0], maximum: sorted[sorted.count - 1],
-            percentile70: percentile(sorted, 0.70),
-            percentile90: percentile(sorted, 0.90)
+            percentile10: percentile(sorted, 0.10),
+            percentile30: percentile(sorted, 0.30)
         )
+    }
+
+    func fetchSignalTowerCandidates(technology: String, country: Int32, network: Int32) -> [SignalTowerCandidate] {
+        struct Metadata {
+            let key: SignalCellKey
+            let band: Int32
+            let latitude: Double?
+            let longitude: Double?
+        }
+
+        let metadata: [Metadata] = (try? performAndWait(name: "fetchContext", author: "fetchSignalTowerCandidates") { _ in
+            let request = CellTweak.fetchRequest()
+            request.predicate = NSPredicate(
+                format: "technology == %@ AND country == %@ AND network == %@",
+                technology, country as NSNumber, network as NSNumber
+            )
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: false)]
+            var seen = Set<SignalCellKey>()
+            return try request.execute().compactMap { measurement in
+                let key = SignalCellKey(
+                    technology: technology, country: country, network: network,
+                    area: measurement.area, cell: measurement.cell
+                )
+                guard seen.insert(key).inserted else { return nil }
+                let location = measurement.appleDatabase?.location
+                return Metadata(
+                    key: key,
+                    band: measurement.band,
+                    latitude: location?.latitude ?? measurement.location?.latitude,
+                    longitude: location?.longitude ?? measurement.location?.longitude
+                )
+            }
+        }) ?? []
+
+        return metadata.map { item in
+            SignalTowerCandidate(
+                key: item.key, band: item.band, latitude: item.latitude, longitude: item.longitude,
+                statistics: fetchSignalStatistics(
+                    technology: item.key.technology, country: item.key.country, network: item.key.network,
+                    area: item.key.area, cell: item.key.cell
+                )
+            )
+        }
     }
 
     private static func percentile(_ sorted: [Double], _ percentile: Double) -> Double {

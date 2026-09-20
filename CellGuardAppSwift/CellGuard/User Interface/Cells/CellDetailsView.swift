@@ -95,11 +95,12 @@ struct SignalStatisticsFormatter {
 
     static func line(_ name: String, _ summary: SignalMetricSummary?) -> String? {
         guard let summary else { return nil }
-        return "\(name) min \(number(summary.minimum)), max \(number(summary.maximum)), P70 \(number(summary.percentile70)), P90 \(number(summary.percentile90))"
+        let decimals = name.hasPrefix("SNR") ? 1 : 0
+        return "\(name) min \(number(summary.minimum, decimals: decimals)), P10 \(number(summary.percentile10, decimals: decimals)), P30 \(number(summary.percentile30, decimals: decimals)), max \(number(summary.maximum, decimals: decimals))"
     }
 
-    static func number(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    static func number(_ value: Double, decimals: Int = 0) -> String {
+        String(format: "%.*f", decimals, value)
     }
 }
 
