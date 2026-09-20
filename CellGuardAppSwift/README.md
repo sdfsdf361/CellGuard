@@ -28,7 +28,9 @@ Open the project in Xcode:
 $ open CellGuard.xcodeproj
 ```
 
-Initially, the first XCode build will fail, but the second ones should be successful as all required files have been generated. 
+Build the native Rust libraries before the first Xcode build, as shown above. This
+generates the files required by the app so the Xcode build does not need a failed
+first attempt.
 
 ## Build
 The app can either be distributed as a .deb package for jailbroken devices with Cydia or as an .ipa file which can be installed using TrollStore.
@@ -82,7 +84,10 @@ uv run build_ipa.py -tipa
 
 The [Build IPA GitHub Actions workflow](../.github/workflows/build-ipa.yml) also
 creates an unsigned `.ipa` on version tags and on manual runs. Download the
-`CellGuard-ipa` artifact from the completed workflow run.
+`CellGuard-ipa` artifact from the completed workflow run. The archive targets a
+generic arm64 iOS device with a minimum deployment target of iOS 14.0, so it is
+compatible with iPhone 14 Pro hardware. Installation of this unsigned build still
+requires a compatible TrollStore version or another signing/installation method.
 
 ### .deb
 

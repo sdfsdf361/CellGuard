@@ -27,7 +27,7 @@ def build_rust_src():
             spinner.ok("🟢")
         else:
             spinner.fail("🔴")
-            print(str(process.stderr).replace('\\n', '\n').replace('\\t', '\t'))
+            print(process.stderr.decode('utf-8', errors='replace'))
             print("Hint: Make sure that the Rust toolchain is installed and run "
                   "\"CONFIGURATION=Release PROJECT_DIR=. ./build-rust.sh\" to debug the error")
             exit(1)
@@ -40,7 +40,12 @@ def get_build_settings() -> tuple[str, str]:
 
     with yaspin(text="Getting Build Settings...") as spinner:
         process = subprocess.run(
-            ['xcodebuild', '-showBuildSettings'],
+            [
+                'xcodebuild', '-showBuildSettings',
+                '-scheme', 'CellGuard (Jailbreak)',
+                '-configuration', 'Release',
+                '-destination', 'generic/platform=iOS',
+            ],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             cwd=Path(__file__).parent,
         )
@@ -69,13 +74,18 @@ def build_archive() -> Path:
             '-scheme', 'CellGuard (Jailbreak)',
             '-archivePath', 'build/CellGuard.xcarchive',
             '-configuration', 'Release',
-            'CODE_SIGN_IDENTITY=', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SINGING_ALLOWED=NO'
+            '-destination', 'generic/platform=iOS',
+            '-skipPackagePluginValidation',
+            '-skipMacroValidation',
+            'CODE_SIGN_IDENTITY=',
+            'CODE_SIGNING_REQUIRED=NO',
+            'CODE_SIGNING_ALLOWED=NO',
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=Path(__file__).parent)
         if process.returncode == 0:
             spinner.ok("🟢")
         else:
             spinner.fail("🔴")
-            print(str(process.stderr).replace('\\n', '\n').replace('\\t', '\t'))
+            print(process.stderr.decode('utf-8', errors='replace'))
             print("Hint: Run \"Product -> Archive\" in XCode to debug the issue, then run this command again")
             exit(1)
 
@@ -93,7 +103,7 @@ def sign_executable(archive_path: Path):
             spinner.ok("🟢")
         else:
             spinner.fail("🔴")
-            print(str(process.stderr).replace('\\n', '\n').replace('\\t', '\t'))
+            print(process.stderr.decode('utf-8', errors='replace'))
             exit(1)
 
 def create_ipa(archive_path: Path, ipa_path: Path):
