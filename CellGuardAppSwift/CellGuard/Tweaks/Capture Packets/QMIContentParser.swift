@@ -67,14 +67,15 @@ struct LTESignalStrengthQMI {
     let rssi: Int8 // dBm
     let rsrq: Int8 // dB
     let rsrp: Int16 // dBm
-    let snr: Int16 // dB
+    let snr: Double // dB (encoded by QMI in 0.1 dB units)
 
     init(data: Data) throws {
         let binaryData = BinaryData(data: data, bigEndian: false)
         rssi = try binaryData.get(0)
         rsrq = try binaryData.get(1)
         rsrp = try binaryData.get(2)
-        snr = try binaryData.get(4)
+        let rawSNR: Int16 = try binaryData.get(4)
+        snr = Double(rawSNR) / 10.0
     }
 }
 
@@ -86,13 +87,14 @@ struct NRSignalStrengthQMI {
     static let missing: Int16 = Int16(bitPattern: UInt16(0x8000))
 
     let rsrp: Int16? // dBm
-    let snr: Int16? // dB
+    let snr: Double? // dB (encoded by QMI in 0.1 dB units)
     let rsrq: Int16? // dB
 
     init(data: Data, extendedData: Data) throws {
         let binaryData = BinaryData(data: data, bigEndian: false)
         rsrp = Self.nilIfMissing(try binaryData.get(0))
-        snr = Self.nilIfMissing(try binaryData.get(2))
+        let rawSNR: Int16 = try binaryData.get(2)
+        snr = Self.nilIfMissing(rawSNR).map { Double($0) / 10.0 }
 
         let extendedBinaryData = BinaryData(data: extendedData, bigEndian: false)
         rsrq = Self.nilIfMissing(try extendedBinaryData.get(0))

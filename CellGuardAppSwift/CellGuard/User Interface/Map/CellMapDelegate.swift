@@ -32,6 +32,10 @@ class CellMapDelegate: NSObject, MKMapViewDelegate {
         }
     }
 
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        (view.annotation as? CellAnnotation)?.loadSignalStatistics()
+    }
+
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         if let annotation = annotation as? CellAnnotation {
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: CellAnnotationView.ReuseID, for: annotation)

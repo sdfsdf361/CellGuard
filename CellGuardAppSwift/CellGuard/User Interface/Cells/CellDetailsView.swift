@@ -39,6 +39,7 @@ struct CellDetailsView: View {
 
         List {
             TweakCellDetailsMap(alsCells: alsCellsRequest, verifyStates: measurementsRequest)
+            CellSignalStatisticsSection(cell: cell)
             CellDetailsCell(cell: cell, verifyStates: measurementsRequest)
             TweakCellDetailsMeasurementCount(alsCells: alsCellsRequest, verifyStates: measurementsRequest)
             // A toolbar item somehow hides the navigation history (back button) upon state change and thus, we use a simple button
@@ -82,6 +83,66 @@ struct CellDetailsView: View {
         return FetchRequest(fetchRequest: request, animation: .default)
     }
 
+}
+
+struct SignalStatisticsFormatter {
+    static func lines(_ statistics: SignalStatistics) -> [String] {
+        [
+            line("RSRP (dBm)", statistics.rsrp), line("RSRQ (dB)", statistics.rsrq),
+            line("SNR (dB)", statistics.snr)
+        ].compactMap { $0 }
+    }
+
+    static func line(_ name: String, _ summary: SignalMetricSummary?) -> String? {
+        guard let summary else { return nil }
+        let decimals = name.hasPrefix("SNR") ? 1 : 0
+        return "\(name) min \(number(summary.minimum, decimals: decimals)), P10 \(number(summary.percentile10, decimals: decimals)), P30 \(number(summary.percentile30, decimals: decimals)), max \(number(summary.maximum, decimals: decimals))"
+    }
+
+    static func number(_ value: Double, decimals: Int = 0) -> String {
+        String(format: "%.*f", decimals, value)
+    }
+}
+
+private struct CellSignalStatisticsSection: View {
+    let cell: Cell
+    @State private var statistics = SignalStatistics.empty
+    @State private var loading = true
+
+    var body: some View {
+        Section(header: Text("Signal statistics"), footer: Text(footer)) {
+            if loading {
+                ProgressView()
+            } else if statistics.hasMeasurements {
+                ForEach(SignalStatisticsFormatter.lines(statistics), id: \.self) { Text($0) }
+            } else {
+                Text("No QMI signal packets")
+                    .foregroundColor(.secondary)
+            }
+        }
+        .onAppear(perform: loadStatistics)
+    }
+
+    private var footer: String {
+        "\(statistics.packetCount) QMI packets used; \(statistics.removedPacketCount) strong outliers removed (3×IQR)."
+    }
+
+    private func loadStatistics() {
+        let technology = cell.technology
+        let country = cell.country
+        let network = cell.network
+        let area = cell.area
+        let cellID = cell.cell
+        DispatchQueue.global(qos: .userInitiated).async {
+            let value = PersistenceController.basedOnEnvironment().fetchSignalStatistics(
+                technology: technology, country: country, network: network, area: area, cell: cellID
+            )
+            DispatchQueue.main.async {
+                statistics = value
+                loading = false
+            }
+        }
+    }
 }
 
 private struct TweakCellDetailsMap: View {

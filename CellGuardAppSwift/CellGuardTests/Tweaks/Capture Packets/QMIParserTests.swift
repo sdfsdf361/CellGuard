@@ -126,4 +126,21 @@ final class QMIParserTests: XCTestCase {
         XCTAssertThrowsError(try ParsedQMIPacket(nsData: data))
     }
 
+    func testLTESNRIsNormalizedToDecibels() throws {
+        let positive = try LTESignalStrengthQMI(data: Data([0, 0, 0, 0, 104, 0]))
+        let negative = try LTESignalStrengthQMI(data: Data([0, 0, 0, 0, 0xA4, 0xFF]))
+
+        XCTAssertEqual(positive.snr, 10.4, accuracy: 0.001)
+        XCTAssertEqual(negative.snr, -9.2, accuracy: 0.001)
+    }
+
+    func testNRSNRIsNormalizedToDecibels() throws {
+        let signal = try NRSignalStrengthQMI(
+            data: Data([0, 0, 50, 0]),
+            extendedData: Data([0, 0])
+        )
+
+        XCTAssertEqual(signal.snr!, 5.0, accuracy: 0.001)
+    }
+
 }

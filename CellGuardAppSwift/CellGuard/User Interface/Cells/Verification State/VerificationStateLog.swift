@@ -275,4 +275,8 @@ private struct LogRelatedPacketsView: View {
         }
     }
 
+    func formatSignalStrength(_ number: Double?, unit: String) -> String {
+        number.map { String(format: "%.1f%@", $0, unit) } ?? "N/A"
+    }
+
 }

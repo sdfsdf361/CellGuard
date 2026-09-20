@@ -356,7 +356,7 @@ private struct SignalStrengthVerificationStage: VerificationStage {
                 if let rsrpAvg = rsrpAvg,
                    let rsrqAvg = rsrqAvg,
                    let snrAvg = snrAvg,
-                   rsrqAvg >= -4 && rsrpAvg >= -100 && snrAvg >= 200 {
+                   rsrqAvg >= -4 && rsrpAvg >= -100 && snrAvg >= 20 {
                     // TODO: Above max. 25 and below and exponential thingy?
                     logger.info("Signal Strength QMI: 5GNR SUS")
                     return .fail(related: VerificationStageRelatedObjects(packetsQmi: Array(fetchedQmiPackets.keys)))
@@ -371,7 +371,7 @@ private struct SignalStrengthVerificationStage: VerificationStage {
                    let rsrqAvg = rsrqAvg,
                    let rsrpAvg = rsrpAvg,
                    let snrAvg = snrAvg,
-                    rssiAvg >= -70 && rsrqAvg >= -4 && rsrpAvg >= -100 && snrAvg >= 200 {
+                    rssiAvg >= -70 && rsrqAvg >= -4 && rsrpAvg >= -100 && snrAvg >= 20 {
                     logger.info("Signal Strength QMI: LTE SUS")
                     return .fail(related: VerificationStageRelatedObjects(packetsQmi: Array(fetchedQmiPackets.keys)))
                 }
@@ -431,6 +431,11 @@ private struct SignalStrengthVerificationStage: VerificationStage {
 
         let sum = values.map {Double($0)}.reduce(0, +)
         return sum / count
+    }
+
+    private func average(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 
 }
