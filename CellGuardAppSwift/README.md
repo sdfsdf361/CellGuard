@@ -80,6 +80,10 @@ uv run build_ipa.py
 uv run build_ipa.py -tipa
 ```
 
+The [Build IPA GitHub Actions workflow](../.github/workflows/build-ipa.yml) also
+creates an unsigned `.ipa` on version tags and on manual runs. Download the
+`CellGuard-ipa` artifact from the completed workflow run.
+
 ### .deb
 
 A .deb file can be installed on jailbroken iPhones using the included dpkg package manager or alternative app stores like Cydia, Zebra, or Sileo.
