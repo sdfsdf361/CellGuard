@@ -49,6 +49,13 @@ jobs:
           brew install ldid
           cargo install cargo-lipo --locked
 
+      - name: Configure unsigned build
+        run: |
+          cat > CellGuardAppSwift/Config/Developer.xcconfig <<'EOF'
+          DEVELOPMENT_TEAM =
+          PRODUCT_BUNDLE_IDENTIFIER = de.tu-darmstadt.www.cellguard.ios
+          EOF
+
       - name: Build IPA
         working-directory: CellGuardAppSwift
         run: uv run --frozen build_ipa.py

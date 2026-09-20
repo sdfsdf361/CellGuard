@@ -80,12 +80,15 @@ def build_archive() -> Path:
             'CODE_SIGN_IDENTITY=',
             'CODE_SIGNING_REQUIRED=NO',
             'CODE_SIGNING_ALLOWED=NO',
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=Path(__file__).parent)
+        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=Path(__file__).parent)
         if process.returncode == 0:
             spinner.ok("🟢")
         else:
             spinner.fail("🔴")
-            print(process.stderr.decode('utf-8', errors='replace'))
+            # xcodebuild writes most compiler diagnostics to stdout. Keeping the
+            # streams combined ensures CI logs contain the actual failure rather
+            # than only the final "ARCHIVE FAILED" summary from stderr.
+            print(process.stdout.decode('utf-8', errors='replace'))
             print("Hint: Run \"Product -> Archive\" in XCode to debug the issue, then run this command again")
             exit(1)
 

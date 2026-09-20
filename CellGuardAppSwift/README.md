@@ -88,6 +88,8 @@ creates an unsigned `.ipa` on version tags and on manual runs. Download the
 generic arm64 iOS device with a minimum deployment target of iOS 14.0, so it is
 compatible with iPhone 14 Pro hardware. Installation of this unsigned build still
 requires a compatible TrollStore version or another signing/installation method.
+The workflow supplies a CI-only bundle configuration automatically; local builds
+continue to use the `Config/Developer.xcconfig` created during setup.
 
 ### .deb
 
