@@ -213,7 +213,7 @@ private struct OperatorComparisonView: View {
                             Text(row.technology)
                                 .font(.caption).foregroundColor(.secondary)
                             ForEach(SignalStatisticsFormatter.lines(row.statistics), id: \.self) {
-                                Text($0).font(.caption).monospacedDigit()
+                                Text($0).font(.system(.caption, design: .monospaced))
                             }
                         }.padding(.vertical, 3)
                     }

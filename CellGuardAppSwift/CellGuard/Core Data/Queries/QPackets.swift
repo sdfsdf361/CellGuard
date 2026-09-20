@@ -95,15 +95,21 @@ extension PersistenceController {
             let lifespan: (start: Date, end: Date, after: NSManagedObjectID?, simSlotID: UInt8)?
             if let fetched = (try? fetchCellLifespan(of: id)) ?? nil {
                 lifespan = (fetched.start, fetched.end, fetched.after, fetched.simSlotID)
-            } else if let active = fetchCellAttribute(cell: id, extract: { cell in
-                guard let start = cell.collected else { return nil }
-                return (start: start, simSlotID: UInt8(cell.simSlotID))
-            }) {
-                // fetchCellLifespan has no end for the currently connected (last)
-                // cell. Include its packets up to now instead of silently losing it.
-                lifespan = (active.start, Date(), nil, active.simSlotID)
             } else {
-                lifespan = nil
+                let active: (start: Date, simSlotID: UInt8)? = fetchCellAttribute(
+                    cell: id,
+                    extract: { cell -> (start: Date, simSlotID: UInt8)? in
+                        guard let start = cell.collected else { return nil }
+                        return (start: start, simSlotID: UInt8(cell.simSlotID))
+                    }
+                )
+                if let active {
+                    // fetchCellLifespan has no end for the currently connected (last)
+                    // cell. Include its packets up to now instead of silently losing it.
+                    lifespan = (active.start, Date(), nil, active.simSlotID)
+                } else {
+                    lifespan = nil
+                }
             }
             guard let lifespan else { continue }
             guard let packets = try? fetchIndexedQMIPackets(
