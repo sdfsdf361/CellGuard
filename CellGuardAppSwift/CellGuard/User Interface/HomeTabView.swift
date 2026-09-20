@@ -169,14 +169,10 @@ private enum OperatorSort: String, CaseIterable, Identifiable {
     case rsrqMaximum = "RSRQ maximum"
     case rsrqP70 = "RSRQ P70"
     case rsrqP90 = "RSRQ P90"
-    case sinr0Minimum = "SINR0 minimum"
-    case sinr0Maximum = "SINR0 maximum"
-    case sinr0P70 = "SINR0 P70"
-    case sinr0P90 = "SINR0 P90"
-    case sinr1Minimum = "SINR1 minimum"
-    case sinr1Maximum = "SINR1 maximum"
-    case sinr1P70 = "SINR1 P70"
-    case sinr1P90 = "SINR1 P90"
+    case snrMinimum = "SNR minimum"
+    case snrMaximum = "SNR maximum"
+    case snrP70 = "SNR P70"
+    case snrP90 = "SNR P90"
 
     var id: Self { self }
 }
@@ -184,9 +180,10 @@ private enum OperatorSort: String, CaseIterable, Identifiable {
 private struct OperatorSignalRow: Identifiable {
     let country: Int32
     let network: Int32
+    let technology: String
     let name: String
     let statistics: SignalStatistics
-    var id: String { "\(country)-\(network)" }
+    var id: String { "\(technology)-\(country)-\(network)" }
 }
 
 private struct OperatorComparisonView: View {
@@ -194,6 +191,7 @@ private struct OperatorComparisonView: View {
     private var cells: FetchedResults<CellTweak>
     @State private var rows: [OperatorSignalRow] = []
     @State private var sort = OperatorSort.rsrpP70
+    @State private var loading = true
 
     var body: some View {
         NavigationView {
@@ -203,11 +201,16 @@ private struct OperatorComparisonView: View {
                         ForEach(OperatorSort.allCases) { Text($0.rawValue).tag($0) }
                     }
                 }
-                Section(header: Text("Operators"), footer: Text("Statistics exclude strong packet outliers using the 3×IQR rule.")) {
+                Section(header: Text("Operators"), footer: Text("QMI statistics are separated by radio technology and exclude strong packet outliers using the 3×IQR rule.")) {
+                    if loading {
+                        ProgressView()
+                    }
                     ForEach(sortedRows) { row in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(row.name).font(.headline)
                             Text("MCC \(row.country) · MNC \(formatMNC(row.network))")
+                                .font(.caption).foregroundColor(.secondary)
+                            Text(row.technology)
                                 .font(.caption).foregroundColor(.secondary)
                             ForEach(SignalStatisticsFormatter.lines(row.statistics), id: \.self) {
                                 Text($0).font(.caption).monospacedDigit()
@@ -236,32 +239,42 @@ private struct OperatorComparisonView: View {
         case .rsrqMaximum: value.rsrq?.maximum ?? -.infinity
         case .rsrqP70: value.rsrq?.percentile70 ?? -.infinity
         case .rsrqP90: value.rsrq?.percentile90 ?? -.infinity
-        case .sinr0Minimum: value.sinr0?.minimum ?? -.infinity
-        case .sinr0Maximum: value.sinr0?.maximum ?? -.infinity
-        case .sinr0P70: value.sinr0?.percentile70 ?? -.infinity
-        case .sinr0P90: value.sinr0?.percentile90 ?? -.infinity
-        case .sinr1Minimum: value.sinr1?.minimum ?? -.infinity
-        case .sinr1Maximum: value.sinr1?.maximum ?? -.infinity
-        case .sinr1P70: value.sinr1?.percentile70 ?? -.infinity
-        case .sinr1P90: value.sinr1?.percentile90 ?? -.infinity
+        case .snrMinimum: value.snr?.minimum ?? -.infinity
+        case .snrMaximum: value.snr?.maximum ?? -.infinity
+        case .snrP70: value.snr?.percentile70 ?? -.infinity
+        case .snrP90: value.snr?.percentile90 ?? -.infinity
         }
     }
 
     private func loadRows() {
-        let unique = Dictionary(grouping: cells, by: { "\($0.country)-\($0.network)" })
-        rows = unique.values.compactMap { group in
-            guard let cell = group.first else { return nil }
-            let statistics = PersistenceController.shared.fetchSignalStatisticsForOperator(
-                country: cell.country, network: cell.network
-            )
-            let names = OperatorDefinitions.shared.translate(country: cell.country, network: cell.network)
-            return OperatorSignalRow(
-                country: cell.country, network: cell.network,
-                name: names.firstCombinedName ?? "Network \(formatMNC(cell.network))",
-                statistics: statistics
-            )
-        }.filter { $0.statistics.hasMeasurements }
+        let keys = Set(cells.map { cell in
+            OperatorKey(technology: cell.technology ?? "Unknown", country: cell.country, network: cell.network)
+        })
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loaded = keys.compactMap { key -> OperatorSignalRow? in
+                let statistics = PersistenceController.shared.fetchSignalStatisticsForOperator(
+                    technology: key.technology, country: key.country, network: key.network
+                )
+                guard statistics.hasMeasurements else { return nil }
+                let names = OperatorDefinitions.shared.translate(country: key.country, network: key.network)
+                return OperatorSignalRow(
+                    country: key.country, network: key.network, technology: key.technology,
+                    name: names.firstCombinedName ?? "Network \(formatMNC(key.network))",
+                    statistics: statistics
+                )
+            }
+            DispatchQueue.main.async {
+                rows = loaded
+                loading = false
+            }
+        }
     }
+}
+
+private struct OperatorKey: Hashable {
+    let technology: String
+    let country: Int32
+    let network: Int32
 }
 
 struct CompositeTabView_Previews: PreviewProvider {

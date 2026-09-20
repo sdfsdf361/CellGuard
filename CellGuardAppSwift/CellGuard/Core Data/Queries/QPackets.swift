@@ -19,26 +19,24 @@ struct SignalMetricSummary: Equatable {
 struct SignalStatistics: Equatable {
     let rsrp: SignalMetricSummary?
     let rsrq: SignalMetricSummary?
-    let sinr0: SignalMetricSummary?
-    let sinr1: SignalMetricSummary?
+    let snr: SignalMetricSummary?
     let packetCount: Int
     let removedPacketCount: Int
 
     static let empty = SignalStatistics(
-        rsrp: nil, rsrq: nil, sinr0: nil, sinr1: nil,
+        rsrp: nil, rsrq: nil, snr: nil,
         packetCount: 0, removedPacketCount: 0
     )
 
     var hasMeasurements: Bool {
-        rsrp != nil || rsrq != nil || sinr0 != nil || sinr1 != nil
+        rsrp != nil || rsrq != nil || snr != nil
     }
 }
 
 private struct SignalSample {
     let rsrp: Double?
     let rsrq: Double?
-    let sinr0: Double?
-    let sinr1: Double?
+    let snr: Double?
 }
 
 struct PacketImportRefs {
@@ -52,32 +50,45 @@ extension PersistenceController {
     /// three interquartile ranges are treated as strong packet anomalies. This wider
     /// variant of Tukey's rule deliberately preserves normal changes in reception.
     func fetchSignalStatistics(for cell: Cell) -> SignalStatistics {
-        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchSignalStatistics") { _ in
-            let request = CellTweak.fetchRequest()
-            request.predicate = sameCellPredicate(cell: cell)
-            request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: true)]
-            return try request.execute().map(\.objectID)
-        }) ?? []
-
-        return fetchSignalStatistics(cellIDs: ids)
+        fetchSignalStatistics(
+            technology: cell.technology, country: cell.country, network: cell.network,
+            area: cell.area, cell: cell.cell
+        )
     }
 
-    /// Calculates a combined distribution for all cells recorded on an operator.
-    func fetchSignalStatisticsForOperator(country: Int32, network: Int32) -> SignalStatistics {
-        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchOperatorSignalStatistics") { _ in
+    func fetchSignalStatistics(
+        technology: String?, country: Int32, network: Int32, area: Int32, cell: Int64
+    ) -> SignalStatistics {
+        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchSignalStatistics") { _ in
             let request = CellTweak.fetchRequest()
             request.predicate = NSPredicate(
-                format: "country == %@ AND network == %@",
-                country as NSNumber, network as NSNumber
+                format: "technology == %@ AND country == %@ AND network == %@ AND area == %@ AND cell == %@",
+                technology ?? "", country as NSNumber, network as NSNumber,
+                area as NSNumber, cell as NSNumber
             )
             request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: true)]
             return try request.execute().map(\.objectID)
         }) ?? []
 
-        return fetchSignalStatistics(cellIDs: ids)
+        return fetchSignalStatistics(cellIDs: ids, technology: technology ?? "")
     }
 
-    private func fetchSignalStatistics(cellIDs ids: [NSManagedObjectID]) -> SignalStatistics {
+    /// Calculates a combined distribution for all cells recorded on an operator.
+    func fetchSignalStatisticsForOperator(technology: String, country: Int32, network: Int32) -> SignalStatistics {
+        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchOperatorSignalStatistics") { _ in
+            let request = CellTweak.fetchRequest()
+            request.predicate = NSPredicate(
+                format: "technology == %@ AND country == %@ AND network == %@",
+                technology, country as NSNumber, network as NSNumber
+            )
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: true)]
+            return try request.execute().map(\.objectID)
+        }) ?? []
+
+        return fetchSignalStatistics(cellIDs: ids, technology: technology)
+    }
+
+    private func fetchSignalStatistics(cellIDs ids: [NSManagedObjectID], technology: String) -> SignalStatistics {
 
         var parsedPackets: [NSManagedObjectID: ParsedQMIPacket] = [:]
         for id in ids {
@@ -106,29 +117,31 @@ extension PersistenceController {
 
         let samples = parsedPackets.values.compactMap { packet -> SignalSample? in
             guard let info = try? ParsedQMISignalInfoIndication(qmiPacket: packet) else { return nil }
-            // Qualcomm exposes one LTE and one NR SNR chain in these indications.
-            // Presenting those consistently as SINR0/SINR1 also makes mixed LTE/NR
-            // operator comparisons possible.
-            let nrIsPresent = info.nr?.rsrp != nil
-            return SignalSample(
-                rsrp: info.nr?.rsrp.map(Double.init) ?? info.lte.map { Double($0.rsrp) },
-                rsrq: info.nr?.rsrq.map(Double.init) ?? info.lte.map { Double($0.rsrq) },
-                sinr0: info.lte.map { Double($0.snr) },
-                sinr1: nrIsPresent ? info.nr?.snr.map(Double.init) : nil
-            )
-        }
+            if technology == ALSTechnology.NR.rawValue, let nr = info.nr {
+                return SignalSample(
+                    rsrp: nr.rsrp.map(Double.init),
+                    rsrq: nr.rsrq.map(Double.init),
+                    snr: nr.snr.map(Double.init)
+                )
+            }
+            if technology == ALSTechnology.LTE.rawValue, let lte = info.lte {
+                return SignalSample(
+                    rsrp: Double(lte.rsrp), rsrq: Double(lte.rsrq), snr: Double(lte.snr)
+                )
+            }
+            return nil
+        }.filter { $0.rsrp != nil || $0.rsrq != nil || $0.snr != nil }
 
         return Self.summarizeSignalSamples(samples)
     }
 
     private static func summarizeSignalSamples(_ samples: [SignalSample]) -> SignalStatistics {
         let columns: [[Double]] = [
-            samples.compactMap(\.rsrp), samples.compactMap(\.rsrq),
-            samples.compactMap(\.sinr0), samples.compactMap(\.sinr1)
+            samples.compactMap(\.rsrp), samples.compactMap(\.rsrq), samples.compactMap(\.snr)
         ]
         let bounds = columns.map(outlierBounds)
         let filtered = samples.filter { sample in
-            let values = [sample.rsrp, sample.rsrq, sample.sinr0, sample.sinr1]
+            let values = [sample.rsrp, sample.rsrq, sample.snr]
             return zip(values, bounds).allSatisfy { value, bound in
                 guard let value, let bound else { return true }
                 return bound.contains(value)
@@ -138,8 +151,7 @@ extension PersistenceController {
         return SignalStatistics(
             rsrp: metricSummary(filtered.compactMap(\.rsrp)),
             rsrq: metricSummary(filtered.compactMap(\.rsrq)),
-            sinr0: metricSummary(filtered.compactMap(\.sinr0)),
-            sinr1: metricSummary(filtered.compactMap(\.sinr1)),
+            snr: metricSummary(filtered.compactMap(\.snr)),
             packetCount: filtered.count,
             removedPacketCount: samples.count - filtered.count
         )

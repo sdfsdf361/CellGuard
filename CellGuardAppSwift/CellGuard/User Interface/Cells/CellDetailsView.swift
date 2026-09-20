@@ -88,8 +88,8 @@ struct CellDetailsView: View {
 struct SignalStatisticsFormatter {
     static func lines(_ statistics: SignalStatistics) -> [String] {
         [
-            line("RSRP", statistics.rsrp), line("RSRQ", statistics.rsrq),
-            line("SINR0", statistics.sinr0), line("SINR1", statistics.sinr1)
+            line("RSRP (dBm)", statistics.rsrp), line("RSRQ (dB)", statistics.rsrq),
+            line("SNR (dB)", statistics.snr)
         ].compactMap { $0 }
     }
 
@@ -106,21 +106,41 @@ struct SignalStatisticsFormatter {
 private struct CellSignalStatisticsSection: View {
     let cell: Cell
     @State private var statistics = SignalStatistics.empty
+    @State private var loading = true
 
     var body: some View {
         Section(header: Text("Signal statistics"), footer: Text(footer)) {
-            if statistics.hasMeasurements {
+            if loading {
+                ProgressView()
+            } else if statistics.hasMeasurements {
                 ForEach(SignalStatisticsFormatter.lines(statistics), id: \.self) { Text($0) }
             } else {
-                Text("No signal packets")
+                Text("No QMI signal packets")
                     .foregroundColor(.secondary)
             }
         }
-        .onAppear { statistics = PersistenceController.shared.fetchSignalStatistics(for: cell) }
+        .onAppear(perform: loadStatistics)
     }
 
     private var footer: String {
-        "\(statistics.packetCount) packets used; \(statistics.removedPacketCount) strong outliers removed (3×IQR)."
+        "\(statistics.packetCount) QMI packets used; \(statistics.removedPacketCount) strong outliers removed (3×IQR)."
+    }
+
+    private func loadStatistics() {
+        let technology = cell.technology
+        let country = cell.country
+        let network = cell.network
+        let area = cell.area
+        let cellID = cell.cell
+        DispatchQueue.global(qos: .userInitiated).async {
+            let value = PersistenceController.basedOnEnvironment().fetchSignalStatistics(
+                technology: technology, country: country, network: network, area: area, cell: cellID
+            )
+            DispatchQueue.main.async {
+                statistics = value
+                loading = false
+            }
+        }
     }
 }
 
