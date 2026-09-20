@@ -1,0 +1,69 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: CellGuardAppSwift/uv.lock
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,x86_64-apple-ios
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: CellGuardAppRust -> target
+
+      - name: Install build tools
+        run: |
+          brew install ldid
+          cargo install cargo-lipo --locked
+
+      - name: Configure unsigned build
+        run: |
+          cat > CellGuardAppSwift/Config/Developer.xcconfig <<'EOF'
+          DEVELOPMENT_TEAM =
+          PRODUCT_BUNDLE_IDENTIFIER = de.tu-darmstadt.www.cellguard.ios
+          EOF
+
+      - name: Build IPA
+        working-directory: CellGuardAppSwift
+        run: uv run --frozen build_ipa.py
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: CellGuard-ipa
+          path: CellGuardAppSwift/build/*.ipa
+          if-no-files-found: error
+          retention-days: 14
