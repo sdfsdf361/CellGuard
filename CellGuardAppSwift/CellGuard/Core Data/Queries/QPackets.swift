@@ -8,12 +8,173 @@
 import CoreData
 import Foundation
 
+/// A distribution summary after obviously invalid signal packets have been removed.
+struct SignalMetricSummary: Equatable {
+    let minimum: Double
+    let maximum: Double
+    let percentile70: Double
+    let percentile90: Double
+}
+
+struct SignalStatistics: Equatable {
+    let rsrp: SignalMetricSummary?
+    let rsrq: SignalMetricSummary?
+    let sinr0: SignalMetricSummary?
+    let sinr1: SignalMetricSummary?
+    let packetCount: Int
+    let removedPacketCount: Int
+
+    static let empty = SignalStatistics(
+        rsrp: nil, rsrq: nil, sinr0: nil, sinr1: nil,
+        packetCount: 0, removedPacketCount: 0
+    )
+
+    var hasMeasurements: Bool {
+        rsrp != nil || rsrq != nil || sinr0 != nil || sinr1 != nil
+    }
+}
+
+private struct SignalSample {
+    let rsrp: Double?
+    let rsrq: Double?
+    let sinr0: Double?
+    let sinr1: Double?
+}
+
 struct PacketImportRefs {
     var cellInfo: [NSManagedObjectID] = []
     var connectivityEvents: [NSManagedObjectID] = []
 }
 
 extension PersistenceController {
+
+    /// Calculates signal distributions for every occurrence of a cell. Values outside
+    /// three interquartile ranges are treated as strong packet anomalies. This wider
+    /// variant of Tukey's rule deliberately preserves normal changes in reception.
+    func fetchSignalStatistics(for cell: Cell) -> SignalStatistics {
+        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchSignalStatistics") { _ in
+            let request = CellTweak.fetchRequest()
+            request.predicate = sameCellPredicate(cell: cell)
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: true)]
+            return try request.execute().map(\.objectID)
+        }) ?? []
+
+        return fetchSignalStatistics(cellIDs: ids)
+    }
+
+    /// Calculates a combined distribution for all cells recorded on an operator.
+    func fetchSignalStatisticsForOperator(country: Int32, network: Int32) -> SignalStatistics {
+        let ids: [NSManagedObjectID] = (try? performAndWait(name: "fetchContext", author: "fetchOperatorSignalStatistics") { _ in
+            let request = CellTweak.fetchRequest()
+            request.predicate = NSPredicate(
+                format: "country == %@ AND network == %@",
+                country as NSNumber, network as NSNumber
+            )
+            request.sortDescriptors = [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: true)]
+            return try request.execute().map(\.objectID)
+        }) ?? []
+
+        return fetchSignalStatistics(cellIDs: ids)
+    }
+
+    private func fetchSignalStatistics(cellIDs ids: [NSManagedObjectID]) -> SignalStatistics {
+
+        var parsedPackets: [NSManagedObjectID: ParsedQMIPacket] = [:]
+        for id in ids {
+            let lifespan: (start: Date, end: Date, after: NSManagedObjectID?, simSlotID: UInt8)?
+            if let fetched = (try? fetchCellLifespan(of: id)) ?? nil {
+                lifespan = (fetched.start, fetched.end, fetched.after, fetched.simSlotID)
+            } else if let active = fetchCellAttribute(cell: id, extract: { cell in
+                guard let start = cell.collected else { return nil }
+                return (start: start, simSlotID: UInt8(cell.simSlotID))
+            }) {
+                // fetchCellLifespan has no end for the currently connected (last)
+                // cell. Include its packets up to now instead of silently losing it.
+                lifespan = (active.start, Date(), nil, active.simSlotID)
+            } else {
+                lifespan = nil
+            }
+            guard let lifespan else { continue }
+            guard let packets = try? fetchIndexedQMIPackets(
+                start: lifespan.start,
+                end: lifespan.end,
+                simSlotID: lifespan.simSlotID,
+                signal: true
+            ) else { continue }
+            parsedPackets.merge(packets) { current, _ in current }
+        }
+
+        let samples = parsedPackets.values.compactMap { packet -> SignalSample? in
+            guard let info = try? ParsedQMISignalInfoIndication(qmiPacket: packet) else { return nil }
+            // Qualcomm exposes one LTE and one NR SNR chain in these indications.
+            // Presenting those consistently as SINR0/SINR1 also makes mixed LTE/NR
+            // operator comparisons possible.
+            let nrIsPresent = info.nr?.rsrp != nil
+            return SignalSample(
+                rsrp: info.nr?.rsrp.map(Double.init) ?? info.lte.map { Double($0.rsrp) },
+                rsrq: info.nr?.rsrq.map(Double.init) ?? info.lte.map { Double($0.rsrq) },
+                sinr0: info.lte.map { Double($0.snr) },
+                sinr1: nrIsPresent ? info.nr?.snr.map(Double.init) : nil
+            )
+        }
+
+        return Self.summarizeSignalSamples(samples)
+    }
+
+    private static func summarizeSignalSamples(_ samples: [SignalSample]) -> SignalStatistics {
+        let columns: [[Double]] = [
+            samples.compactMap(\.rsrp), samples.compactMap(\.rsrq),
+            samples.compactMap(\.sinr0), samples.compactMap(\.sinr1)
+        ]
+        let bounds = columns.map(outlierBounds)
+        let filtered = samples.filter { sample in
+            let values = [sample.rsrp, sample.rsrq, sample.sinr0, sample.sinr1]
+            return zip(values, bounds).allSatisfy { value, bound in
+                guard let value, let bound else { return true }
+                return bound.contains(value)
+            }
+        }
+
+        return SignalStatistics(
+            rsrp: metricSummary(filtered.compactMap(\.rsrp)),
+            rsrq: metricSummary(filtered.compactMap(\.rsrq)),
+            sinr0: metricSummary(filtered.compactMap(\.sinr0)),
+            sinr1: metricSummary(filtered.compactMap(\.sinr1)),
+            packetCount: filtered.count,
+            removedPacketCount: samples.count - filtered.count
+        )
+    }
+
+    private static func outlierBounds(_ values: [Double]) -> ClosedRange<Double>? {
+        guard values.count >= 4 else { return nil }
+        let sorted = values.sorted()
+        let q1 = percentile(sorted, 0.25)
+        let q3 = percentile(sorted, 0.75)
+        let spread = q3 - q1
+        // A zero IQR is common for radio measurements. Do not discard a packet
+        // merely because all the other integer readings happen to be identical.
+        guard spread > 0 else { return nil }
+        return (q1 - 3 * spread)...(q3 + 3 * spread)
+    }
+
+    private static func metricSummary(_ values: [Double]) -> SignalMetricSummary? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return SignalMetricSummary(
+            minimum: sorted[0], maximum: sorted[sorted.count - 1],
+            percentile70: percentile(sorted, 0.70),
+            percentile90: percentile(sorted, 0.90)
+        )
+    }
+
+    private static func percentile(_ sorted: [Double], _ percentile: Double) -> Double {
+        guard sorted.count > 1 else { return sorted[0] }
+        let position = percentile * Double(sorted.count - 1)
+        let lower = Int(position.rounded(.down))
+        let upper = Int(position.rounded(.up))
+        guard lower != upper else { return sorted[lower] }
+        return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - Double(lower))
+    }
 
     /// Uses `NSBatchInsertRequest` (BIR) to import QMI packets into the Core Data store on a private queue.
     /// Returns the number of imported packets and references to packets with (a) cell information and (b) connectivity events.

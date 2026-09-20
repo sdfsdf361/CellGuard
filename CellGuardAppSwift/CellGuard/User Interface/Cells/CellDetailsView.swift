@@ -39,6 +39,7 @@ struct CellDetailsView: View {
 
         List {
             TweakCellDetailsMap(alsCells: alsCellsRequest, verifyStates: measurementsRequest)
+            CellSignalStatisticsSection(cell: cell)
             CellDetailsCell(cell: cell, verifyStates: measurementsRequest)
             TweakCellDetailsMeasurementCount(alsCells: alsCellsRequest, verifyStates: measurementsRequest)
             // A toolbar item somehow hides the navigation history (back button) upon state change and thus, we use a simple button
@@ -82,6 +83,45 @@ struct CellDetailsView: View {
         return FetchRequest(fetchRequest: request, animation: .default)
     }
 
+}
+
+struct SignalStatisticsFormatter {
+    static func lines(_ statistics: SignalStatistics) -> [String] {
+        [
+            line("RSRP", statistics.rsrp), line("RSRQ", statistics.rsrq),
+            line("SINR0", statistics.sinr0), line("SINR1", statistics.sinr1)
+        ].compactMap { $0 }
+    }
+
+    static func line(_ name: String, _ summary: SignalMetricSummary?) -> String? {
+        guard let summary else { return nil }
+        return "\(name) min \(number(summary.minimum)), max \(number(summary.maximum)), P70 \(number(summary.percentile70)), P90 \(number(summary.percentile90))"
+    }
+
+    static func number(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    }
+}
+
+private struct CellSignalStatisticsSection: View {
+    let cell: Cell
+    @State private var statistics = SignalStatistics.empty
+
+    var body: some View {
+        Section(header: Text("Signal statistics"), footer: Text(footer)) {
+            if statistics.hasMeasurements {
+                ForEach(SignalStatisticsFormatter.lines(statistics), id: \.self) { Text($0) }
+            } else {
+                Text("No signal packets")
+                    .foregroundColor(.secondary)
+            }
+        }
+        .onAppear { statistics = PersistenceController.shared.fetchSignalStatistics(for: cell) }
+    }
+
+    private var footer: String {
+        "\(statistics.packetCount) packets used; \(statistics.removedPacketCount) strong outliers removed (3×IQR)."
+    }
 }
 
 private struct TweakCellDetailsMap: View {

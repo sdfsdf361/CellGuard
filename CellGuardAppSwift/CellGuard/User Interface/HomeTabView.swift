@@ -13,6 +13,7 @@ import NavigationBackport
 private enum ShownTab: Identifiable {
     case summary
     case map
+    case operators
     case packets
 
     var id: Self {
@@ -125,6 +126,11 @@ private struct CompositeTabView: View {
                     Label("Map", systemImage: "map.fill")
                 }
                 .tag(ShownTab.map)
+            OperatorComparisonView()
+                .tabItem {
+                    Label("Compare", systemImage: "chart.bar.xaxis")
+                }
+                .tag(ShownTab.operators)
             PacketTabView()
                 .tabItem {
                     Label("Packets", systemImage: "shippingbox")
@@ -152,6 +158,110 @@ private struct CompositeTabView: View {
         }
     }
 
+}
+
+private enum OperatorSort: String, CaseIterable, Identifiable {
+    case rsrpMinimum = "RSRP minimum"
+    case rsrpMaximum = "RSRP maximum"
+    case rsrpP70 = "RSRP P70"
+    case rsrpP90 = "RSRP P90"
+    case rsrqMinimum = "RSRQ minimum"
+    case rsrqMaximum = "RSRQ maximum"
+    case rsrqP70 = "RSRQ P70"
+    case rsrqP90 = "RSRQ P90"
+    case sinr0Minimum = "SINR0 minimum"
+    case sinr0Maximum = "SINR0 maximum"
+    case sinr0P70 = "SINR0 P70"
+    case sinr0P90 = "SINR0 P90"
+    case sinr1Minimum = "SINR1 minimum"
+    case sinr1Maximum = "SINR1 maximum"
+    case sinr1P70 = "SINR1 P70"
+    case sinr1P90 = "SINR1 P90"
+
+    var id: Self { self }
+}
+
+private struct OperatorSignalRow: Identifiable {
+    let country: Int32
+    let network: Int32
+    let name: String
+    let statistics: SignalStatistics
+    var id: String { "\(country)-\(network)" }
+}
+
+private struct OperatorComparisonView: View {
+    @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \CellTweak.collected, ascending: false)])
+    private var cells: FetchedResults<CellTweak>
+    @State private var rows: [OperatorSignalRow] = []
+    @State private var sort = OperatorSort.rsrpP70
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    Picker("Sort by", selection: $sort) {
+                        ForEach(OperatorSort.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                }
+                Section(header: Text("Operators"), footer: Text("Statistics exclude strong packet outliers using the 3×IQR rule.")) {
+                    ForEach(sortedRows) { row in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(row.name).font(.headline)
+                            Text("MCC \(row.country) · MNC \(formatMNC(row.network))")
+                                .font(.caption).foregroundColor(.secondary)
+                            ForEach(SignalStatisticsFormatter.lines(row.statistics), id: \.self) {
+                                Text($0).font(.caption).monospacedDigit()
+                            }
+                        }.padding(.vertical, 3)
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Operator comparison")
+            .onAppear(perform: loadRows)
+        }
+    }
+
+    private var sortedRows: [OperatorSignalRow] {
+        rows.sorted { score($0.statistics) > score($1.statistics) }
+    }
+
+    private func score(_ value: SignalStatistics) -> Double {
+        switch sort {
+        case .rsrpMinimum: value.rsrp?.minimum ?? -.infinity
+        case .rsrpMaximum: value.rsrp?.maximum ?? -.infinity
+        case .rsrpP70: value.rsrp?.percentile70 ?? -.infinity
+        case .rsrpP90: value.rsrp?.percentile90 ?? -.infinity
+        case .rsrqMinimum: value.rsrq?.minimum ?? -.infinity
+        case .rsrqMaximum: value.rsrq?.maximum ?? -.infinity
+        case .rsrqP70: value.rsrq?.percentile70 ?? -.infinity
+        case .rsrqP90: value.rsrq?.percentile90 ?? -.infinity
+        case .sinr0Minimum: value.sinr0?.minimum ?? -.infinity
+        case .sinr0Maximum: value.sinr0?.maximum ?? -.infinity
+        case .sinr0P70: value.sinr0?.percentile70 ?? -.infinity
+        case .sinr0P90: value.sinr0?.percentile90 ?? -.infinity
+        case .sinr1Minimum: value.sinr1?.minimum ?? -.infinity
+        case .sinr1Maximum: value.sinr1?.maximum ?? -.infinity
+        case .sinr1P70: value.sinr1?.percentile70 ?? -.infinity
+        case .sinr1P90: value.sinr1?.percentile90 ?? -.infinity
+        }
+    }
+
+    private func loadRows() {
+        let unique = Dictionary(grouping: cells, by: { "\($0.country)-\($0.network)" })
+        rows = unique.values.compactMap { group in
+            guard let cell = group.first else { return nil }
+            let statistics = PersistenceController.shared.fetchSignalStatisticsForOperator(
+                country: cell.country, network: cell.network
+            )
+            let names = OperatorDefinitions.shared.translate(country: cell.country, network: cell.network)
+            return OperatorSignalRow(
+                country: cell.country, network: cell.network,
+                name: names.firstCombinedName ?? "Network \(formatMNC(cell.network))",
+                statistics: statistics
+            )
+        }.filter { $0.statistics.hasMeasurements }
+    }
 }
 
 struct CompositeTabView_Previews: PreviewProvider {

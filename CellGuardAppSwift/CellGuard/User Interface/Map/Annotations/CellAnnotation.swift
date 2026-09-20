@@ -33,10 +33,12 @@ class CellAnnotation: NSObject, MKAnnotation, DatabaseAnnotation {
         // Get the first available combined name
         let netOperators = OperatorDefinitions.shared.translate(country: cell.country, network: cell.network)
 
+        let statistics = PersistenceController.shared.fetchSignalStatistics(for: cell)
+        let signalLines = SignalStatisticsFormatter.lines(statistics)
         self.init(
             cell: cell,
             title: netOperators.firstCombinedName ?? "Network \(formatMNC(cell.network))",
-            subtitle: "Area: \(cell.area) - Cell: \(cell.cell)"
+            subtitle: (signalLines + ["Area: \(cell.area) - Cell: \(cell.cell)"]).joined(separator: "\n")
         )
     }
 
